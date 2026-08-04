@@ -1,0 +1,10 @@
+[package]
+name = "omp-control-plane"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+omp-rpc = { path = "../omp-rpc" }
+serde.workspace = true
+tokio.workspace = true
