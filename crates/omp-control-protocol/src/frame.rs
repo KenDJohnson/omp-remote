@@ -306,6 +306,11 @@ pub enum ControlRequest {
         agent_id: AgentId,
         session_path: String,
     },
+    RespondToUi {
+        agent_id: AgentId,
+        holder: LeaseHolderId,
+        response: ExtensionUiResponseFrame,
+    },
     AcquireInteractionLease {
         agent_id: AgentId,
         holder: LeaseHolderId,
@@ -367,6 +372,8 @@ pub struct UnsubscribeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiResponseEnvelope {
     pub agent_id: AgentId,
+    pub request_id: RequestId,
+    pub operation_id: OperationId,
     pub holder: LeaseHolderId,
     pub response: ExtensionUiResponseFrame,
 }
@@ -375,6 +382,7 @@ pub struct UiResponseEnvelope {
 #[serde(rename_all = "camelCase")]
 pub struct UiInteractionEnvelope {
     pub agent_id: AgentId,
+    pub event_sequence: EventSequence,
     pub request: ExtensionUiRequestFrame,
 }
 

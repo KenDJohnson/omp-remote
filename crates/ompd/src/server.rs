@@ -356,26 +356,29 @@ async fn handle_client_frame(
         }
         ClientFrame::UiResponse(UiResponseEnvelope {
             agent_id,
+            request_id,
+            operation_id,
             holder,
             response,
         }) => {
-            if !device.scopes.answer_ui {
-                return outbound
-                    .control(ServerFrame::Error(permission_error()))
-                    .await
-                    .is_ok();
-            }
-            if let Err(error) = state
-                .controller
-                .send_ui_response(&agent_id, &holder, response)
+            let response = execute_request(
+                state,
+                device,
+                RequestEnvelope {
+                    request_id,
+                    operation_id: Some(operation_id),
+                    request: ControlRequest::RespondToUi {
+                        agent_id,
+                        holder,
+                        response,
+                    },
+                },
+            )
+            .await;
+            outbound
+                .response(ServerFrame::Response(response))
                 .await
-            {
-                return outbound
-                    .control(ServerFrame::Error(error.into_protocol_error()))
-                    .await
-                    .is_ok();
-            }
-            true
+                .is_ok()
         }
         ClientFrame::Ping(Ping { nonce }) => outbound
             .control(ServerFrame::Pong(Pong { nonce }))
@@ -467,7 +470,8 @@ fn authorized(scopes: &DeviceScopes, request: &ControlRequest) -> bool {
         ControlRequest::Prompt { .. }
         | ControlRequest::Steer { .. }
         | ControlRequest::FollowUp { .. } => scopes.prompt,
-        ControlRequest::AcquireInteractionLease { .. }
+        ControlRequest::RespondToUi { .. }
+        | ControlRequest::AcquireInteractionLease { .. }
         | ControlRequest::ReleaseInteractionLease { .. } => scopes.answer_ui,
     }
 }
@@ -570,6 +574,7 @@ fn emit_update(update: AgentUpdate, outbound: &Outbound) -> bool {
             ServerMessage::ExtensionUi(request) => {
                 outbound.interaction(ServerFrame::InteractionRequest(UiInteractionEnvelope {
                     agent_id,
+                    event_sequence,
                     request,
                 }))
             }

@@ -1,0 +1,45 @@
+[package]
+name = "omp-control-client"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+futures-channel.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
+omp-control-protocol = { path = "../omp-control-protocol" }
+omp-rpc = { path = "../omp-rpc" }
+parking_lot.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustls.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys = { workspace = true, features = [
+  "BinaryType",
+  "CloseEvent",
+  "ErrorEvent",
+  "Event",
+  "MessageEvent",
+  "Storage",
+  "WebSocket",
+  "Window",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+rcgen.workspace = true
+tokio-rustls = "0.26"
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true

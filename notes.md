@@ -35,6 +35,11 @@
 - Network delivery uses bounded priority lanes. Subscription tasks use non-blocking enqueue and emit an explicit replay gap on overflow, keeping control-plane actors independent of socket backpressure.
 - Persisted agent/session cursors seed restored actor snapshots. Since replay buffers are intentionally volatile, any client behind a restored cursor receives a snapshot/resynchronization path rather than fabricated replay.
 - The daemon controller now owns runtime launch, prompt, steering, abort, session switch, and graceful shutdown wiring; stable operation outcomes wrap mutating dispatch before execution.
+- The control client separates transport (`WebSocketAdapter`/`BinaryWebSocket`), credential persistence, replicated state, and the reconnecting runner so Dioxus platform shells can supply only platform-specific adapters and storage.
+- A pairing welcome is not considered successful until the issued device credential is durably saved; subsequent reconnects authenticate with that device credential.
+- Every reconnect assigns fresh connection-local request IDs while retaining the stable operation ID for mutating requests and UI responses. Read-only requests are failed on disconnect rather than retried ambiguously.
+- The replicated reducer marks an agent as requiring resynchronization after any revision or event-sequence failure, suppresses its resume cursor, and rejects further incremental updates until a fresh snapshot arrives.
+- Browser clients reject certificate fingerprints because Web APIs do not expose peer certificates. Native clients implement fingerprint pinning with Rustls signature verification delegated to WebPKI.
 
 ### Questions for later
 

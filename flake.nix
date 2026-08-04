@@ -83,6 +83,13 @@
               taploExtraArgs = "--config ./taplo.toml";
             };
 
+            wasm-client = craneLib.cargoTest (commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoExtraArgs = "-p omp-control-client --target wasm32-unknown-unknown --test convergence";
+                nativeBuildInputs = [pkgs.lld pkgs.nodejs pkgs.wasm-bindgen-cli];
+              });
+
             wasm-protocol = craneLib.cargoTest (commonArgs
               // {
                 inherit cargoArtifacts;

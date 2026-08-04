@@ -278,6 +278,14 @@ impl DaemonController {
                 self.launch(agent_id, config).await?;
                 Ok(ControlResponse::Accepted)
             }
+            ControlRequest::RespondToUi {
+                agent_id,
+                holder,
+                response,
+            } => {
+                self.send_ui_response(&agent_id, &holder, response).await?;
+                Ok(ControlResponse::Accepted)
+            }
             ControlRequest::AcquireInteractionLease {
                 agent_id,
                 holder,

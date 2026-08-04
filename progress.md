@@ -33,4 +33,11 @@
   - Added bounded priority output queues, replay-gap signaling, WebSocket heartbeats, and slow-send deadlines without blocking authoritative actors.
   - Verified TLS 1.3 connectivity, certificate modes, loopback enforcement, unauthenticated/revoked rejection, pairing expiry/single use, credential issuance, permission denial, persisted recovery, heartbeat closure, and slow-subscriber isolation in eleven transport tests.
   - Smoke-tested the built `ompd serve` and `ompd pair` executables end to end.
-- Milestone 6 is next: native/browser control clients, reconnection/resume, retries, replicated reduction, and credential storage.
+- Completed Milestone 6:
+  - Added `omp-control-client` with native Rustls and browser WebSocket adapters, strict endpoint/TLS-mode validation, native SHA-256 certificate pinning, and matching CBOR protocol framing.
+  - Added pairing and stored-device authentication, mandatory persistence of newly issued credentials, platform-neutral credential storage contracts, native in-memory/test storage, and browser local-storage support.
+  - Added a reconnecting client runner with connection status/events, subscription cursor resume, fresh request IDs, stable operation IDs, and retry of in-flight mutating requests and UI responses.
+  - Added a replicated-state reducer that applies snapshots, revisions, streamed events, and UI interactions to one cursor and fails closed until a fresh snapshot after any sequence/revision gap.
+  - Verified prompt and UI-response retry identity, credential transition after pairing, contiguous replay/fresh-snapshot recovery, native pinned TLS, browser adapter constraints, and native/browser-WASM state convergence.
+  - Verified with native and WASM client tests plus warning-free `cargo clippy -p omp-control-client --all-targets -- -D warnings`.
+- Milestone 7 is next: shared Dioxus applications for desktop, web, Android, and iOS.
