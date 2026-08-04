@@ -1,10 +1,7 @@
-use std::{
-    collections::BTreeMap,
-    fmt,
-    sync::{Arc, RwLock},
-};
+use parking_lot::RwLock;
+use std::{collections::BTreeMap, fmt, sync::Arc};
 
-use crate::{AgentActorConfig, AgentError, AgentHandle, AgentId};
+use crate::{AgentActorConfig, AgentError, AgentHandle, AgentId, AgentSnapshot};
 
 #[derive(Clone, Debug)]
 pub struct AgentRegistry {
@@ -22,10 +19,7 @@ impl AgentRegistry {
     }
 
     pub fn create(&self, agent_id: AgentId) -> Result<AgentHandle, RegistryError> {
-        let mut agents = self
-            .agents
-            .write()
-            .expect("agent registry lock was poisoned");
+        let mut agents = self.agents.write();
         if agents.contains_key(&agent_id) {
             return Err(RegistryError::AlreadyExists(agent_id));
         }
@@ -34,30 +28,31 @@ impl AgentRegistry {
         Ok(handle)
     }
 
+    pub fn restore(&self, snapshot: AgentSnapshot) -> Result<AgentHandle, RegistryError> {
+        let agent_id = snapshot.agent_id.clone();
+        let mut agents = self.agents.write();
+        if agents.contains_key(&agent_id) {
+            return Err(RegistryError::AlreadyExists(agent_id));
+        }
+        let handle = AgentHandle::spawn_with_snapshot(snapshot, self.config);
+        agents.insert(agent_id, handle.clone());
+        Ok(handle)
+    }
+
     #[must_use]
     pub fn get(&self, agent_id: &AgentId) -> Option<AgentHandle> {
-        self.agents
-            .read()
-            .expect("agent registry lock was poisoned")
-            .get(agent_id)
-            .cloned()
+        self.agents.read().get(agent_id).cloned()
     }
 
     #[must_use]
     pub fn list(&self) -> Vec<AgentId> {
-        self.agents
-            .read()
-            .expect("agent registry lock was poisoned")
-            .keys()
-            .cloned()
-            .collect()
+        self.agents.read().keys().cloned().collect()
     }
 
     pub async fn remove(&self, agent_id: &AgentId) -> Result<(), RegistryError> {
         let handle = self
             .agents
             .write()
-            .expect("agent registry lock was poisoned")
             .remove(agent_id)
             .ok_or_else(|| RegistryError::NotFound(agent_id.clone()))?;
         handle.shutdown().await.map_err(RegistryError::Actor)

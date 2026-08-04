@@ -5,13 +5,28 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+axum.workspace = true
+axum-server.workspace = true
 base64.workspace = true
+clap.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
+omp-control-plane = { path = "../omp-control-plane" }
 omp-control-protocol = { path = "../omp-control-protocol" }
+omp-rpc = { path = "../omp-rpc" }
+omp-runtime = { path = "../omp-runtime" }
+parking_lot.workspace = true
+qrcode.workspace = true
 rusqlite.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+serde.workspace = true
 sha2.workspace = true
 subtle.workspace = true
+tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rcgen.workspace = true
+tokio-tungstenite.workspace = true

@@ -2,16 +2,17 @@ use std::{
     fmt,
     num::{NonZeroU32, NonZeroU64},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use omp_control_protocol::{
-    AgentId, AgentLifecycle, CborCodec, ClientPlatform, ControlRequest, DeviceId, DeviceScopes,
-    DeviceToken, EventSequence, PairingId, PairingSecret, ResponseOutcome, RunId, ServerId,
-    StateRevision,
+    AgentId, AgentLifecycle, CborCodec, ClientPlatform, ControlRequest, DeviceCredential,
+    DeviceDescriptor, DeviceId, DeviceScopes, DeviceToken, EventSequence, PairingId, PairingSecret,
+    ResponseOutcome, RunId, ServerId, StateRevision,
 };
+use parking_lot::{Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -137,7 +138,7 @@ impl Store {
 
     pub fn upsert_agent(&self, record: &AgentRecord) -> Result<(), StoreError> {
         let (lifecycle, failure_reason) = encode_lifecycle(&record.lifecycle);
-        self.connection()?.execute(
+        self.connection().execute(
             r#"
             INSERT INTO agents (
                 agent_id, lifecycle, failure_reason, process_id, active_run_id,
@@ -165,7 +166,7 @@ impl Store {
 
     pub fn agent(&self, agent_id: &AgentId) -> Result<Option<AgentRecord>, StoreError> {
         let raw = self
-            .connection()?
+            .connection()
             .query_row(
                 r#"
                 SELECT agent_id, lifecycle, failure_reason, process_id, active_run_id,
@@ -189,8 +190,33 @@ impl Store {
         raw.map(decode_agent).transpose()
     }
 
+    pub fn agents(&self) -> Result<Vec<AgentRecord>, StoreError> {
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            r#"
+            SELECT agent_id, lifecycle, failure_reason, process_id, active_run_id,
+                   created_at_ms, updated_at_ms
+            FROM agents ORDER BY agent_id
+            "#,
+        )?;
+        let records = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?;
+        records
+            .map(|record| record.map_err(StoreError::Database).and_then(decode_agent))
+            .collect()
+    }
+
     pub fn upsert_session(&self, record: &SessionResumeRecord) -> Result<(), StoreError> {
-        self.connection()?.execute(
+        self.connection().execute(
             r#"
             INSERT INTO sessions (
                 agent_id, session_id, session_file, revision, event_sequence, updated_at_ms
@@ -216,7 +242,7 @@ impl Store {
 
     pub fn session(&self, agent_id: &AgentId) -> Result<Option<SessionResumeRecord>, StoreError> {
         let raw = self
-            .connection()?
+            .connection()
             .query_row(
                 r#"
                 SELECT agent_id, session_id, session_file, revision, event_sequence, updated_at_ms
@@ -244,7 +270,7 @@ impl Store {
         token: &DeviceToken,
     ) -> Result<(), StoreError> {
         let hash = hash_secret(token.expose_secret().as_bytes());
-        self.connection()?.execute(
+        self.connection().execute(
             r#"
             INSERT INTO devices (
                 device_id, name, platform,
@@ -281,7 +307,7 @@ impl Store {
     }
 
     pub fn device(&self, device_id: &DeviceId) -> Result<Option<DeviceRecord>, StoreError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         load_device(&connection, device_id)
     }
 
@@ -291,7 +317,7 @@ impl Store {
         token: &DeviceToken,
         now_ms: u64,
     ) -> Result<DeviceRecord, DeviceAuthenticationError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let raw = connection
             .query_row(
                 r#"
@@ -324,7 +350,7 @@ impl Store {
     }
 
     pub fn revoke_device(&self, device_id: &DeviceId, now_ms: u64) -> Result<bool, StoreError> {
-        let changed = self.connection()?.execute(
+        let changed = self.connection().execute(
             r#"
             UPDATE devices SET revoked_at_ms = ?2
             WHERE device_id = ?1 AND revoked_at_ms IS NULL
@@ -351,7 +377,7 @@ impl Store {
         let secret_hash = hash_secret(secret.expose_secret().as_bytes());
         let pairing_id =
             PairingId::new(Uuid::new_v4().to_string()).expect("UUID pairing IDs are non-empty");
-        self.connection()?.execute(
+        self.connection().execute(
             r#"
             INSERT INTO pairing_secrets (
                 pairing_id, requested_name,
@@ -387,7 +413,7 @@ impl Store {
         secret: &PairingSecret,
         now_ms: u64,
     ) -> Result<PairingRecord, PairingError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let raw =
             load_pairing_raw(&transaction, pairing_id)?.ok_or(PairingError::InvalidCredential)?;
@@ -427,6 +453,84 @@ impl Store {
         })
     }
 
+    pub fn exchange_pairing(
+        &self,
+        pairing_id: &PairingId,
+        secret: &PairingSecret,
+        descriptor: &DeviceDescriptor,
+        now_ms: u64,
+    ) -> Result<DeviceCredential, PairingError> {
+        let mut token_bytes = [0_u8; 32];
+        getrandom::fill(&mut token_bytes)
+            .map_err(|error| PairingError::Store(StoreError::Random(error.to_string())))?;
+        let token = DeviceToken::new(URL_SAFE_NO_PAD.encode(token_bytes));
+        let device_id =
+            DeviceId::new(Uuid::new_v4().to_string()).expect("UUID device IDs are non-empty");
+        let mut connection = self.connection();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let raw =
+            load_pairing_raw(&transaction, pairing_id)?.ok_or(PairingError::InvalidCredential)?;
+        let candidate_hash = hash_secret(secret.expose_secret().as_bytes());
+        if raw.secret_hash.len() != candidate_hash.len()
+            || !bool::from(raw.secret_hash.as_slice().ct_eq(candidate_hash.as_slice()))
+        {
+            return Err(PairingError::InvalidCredential);
+        }
+        if raw.consumed_at_ms.is_some() {
+            return Err(PairingError::Consumed);
+        }
+        if raw.expires_at_ms <= now_ms {
+            return Err(PairingError::Expired);
+        }
+        let changed = transaction.execute(
+            "UPDATE pairing_secrets SET consumed_at_ms = ?2
+             WHERE pairing_id = ?1 AND consumed_at_ms IS NULL",
+            params![
+                pairing_id.as_str(),
+                sql_u64(now_ms, "pairing consumed_at_ms")?
+            ],
+        )?;
+        if changed != 1 {
+            return Err(PairingError::Consumed);
+        }
+        let token_hash = hash_secret(token.expose_secret().as_bytes());
+        let name = if raw.requested_name.is_empty() {
+            descriptor.name.clone()
+        } else {
+            raw.requested_name
+        };
+        transaction.execute(
+            r#"
+            INSERT INTO devices (
+                device_id, name, platform,
+                scope_observe, scope_prompt, scope_mutate_session,
+                scope_stop_agent, scope_answer_ui, scope_administer_devices,
+                token_hash, created_at_ms, last_seen_at_ms, revoked_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL)
+            "#,
+            params![
+                device_id.as_str(),
+                name,
+                encode_platform(descriptor.platform),
+                raw.scopes.observe,
+                raw.scopes.prompt,
+                raw.scopes.mutate_session,
+                raw.scopes.stop_agent,
+                raw.scopes.answer_ui,
+                raw.scopes.administer_devices,
+                token_hash.as_slice(),
+                sql_u64(now_ms, "device created_at_ms")?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(DeviceCredential {
+            server_id: self.server_id.clone(),
+            device_id,
+            token,
+            scopes: raw.scopes,
+        })
+    }
+
     pub fn claim_operation(
         &self,
         key: &OperationKey,
@@ -436,7 +540,7 @@ impl Store {
         let codec = database_codec();
         let encoded = codec.encode(request)?;
         let request_hash = hash_secret(&encoded);
-        let connection = self.connection()?;
+        let connection = self.connection();
         let inserted = connection.execute(
             r#"
             INSERT OR IGNORE INTO operations (
@@ -491,7 +595,7 @@ impl Store {
         now_ms: u64,
     ) -> Result<(), OperationError> {
         let encoded = database_codec().encode(outcome)?;
-        let changed = self.connection()?.execute(
+        let changed = self.connection().execute(
             r#"
             UPDATE operations
             SET status = 'completed', outcome_cbor = ?3, completed_at_ms = ?4
@@ -517,7 +621,7 @@ impl Store {
         older_than_ms: u64,
         max_count: usize,
     ) -> Result<usize, StoreError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let old = connection.execute(
             "DELETE FROM operations WHERE device_id = ?1 AND created_at_ms < ?2",
             params![
@@ -543,8 +647,8 @@ impl Store {
         Ok(old + excess)
     }
 
-    fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StoreError> {
-        self.connection.lock().map_err(|_| StoreError::Poisoned)
+    fn connection(&self) -> MutexGuard<'_, Connection> {
+        self.connection.lock()
     }
 }
 
@@ -898,7 +1002,6 @@ pub enum StoreError {
     CorruptData(String),
     Random(String),
     Clock(String),
-    Poisoned,
 }
 
 impl fmt::Display for StoreError {
@@ -918,7 +1021,6 @@ impl fmt::Display for StoreError {
                 write!(formatter, "secure random generation failed: {message}")
             }
             Self::Clock(message) => write!(formatter, "system clock failed: {message}"),
-            Self::Poisoned => formatter.write_str("SQLite connection lock was poisoned"),
         }
     }
 }

@@ -7,4 +7,5 @@ publish = false
 [dependencies]
 omp-control-protocol = { path = "../omp-control-protocol" }
 omp-rpc = { path = "../omp-rpc" }
+parking_lot.workspace = true
 tokio.workspace = true

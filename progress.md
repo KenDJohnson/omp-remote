@@ -25,4 +25,12 @@
   - Added persistent operation claims/outcomes keyed by device and operation ID, conflict detection, indeterminate crash recovery, and age/count pruning.
   - Verified interrupted-process recovery, stable identity/session metadata, restart-safe revocation, raw-secret exclusion/redacted debug output, pairing expiry/single-use behavior, and prompt deduplication across retries/restarts.
   - Verified with `cargo test -p ompd` and warning-free `cargo clippy -p ompd --all-targets -- -D warnings`.
-- Milestone 5 is next: TLS-only WebSocket transport, authenticated sessions, pairing CLI, permissions, and backpressure.
+- Completed Milestone 5:
+  - Added the `ompd` executable with TLS 1.3 WebSockets at `/control`, direct trusted/pinned certificate modes, loopback-only trusted reverse-proxy mode, and explicit loopback-only development plaintext.
+  - Added strict first-frame authentication, per-device scope enforcement, atomic pairing-to-device credential exchange, operation deduplication, binary CBOR framing, and no pre-authentication state exposure.
+  - Added an owner-only local Unix administration socket and `ompd pair` command that emits terminal QR, native deep-link, and browser fragment links without putting pairing secrets in HTTP requests.
+  - Connected protocol requests to supervised OMP runtimes and authoritative state, including launch, prompt, steering/follow-up, abort, session switching, UI lease checks, graceful daemon shutdown, and persisted snapshot restoration.
+  - Added bounded priority output queues, replay-gap signaling, WebSocket heartbeats, and slow-send deadlines without blocking authoritative actors.
+  - Verified TLS 1.3 connectivity, certificate modes, loopback enforcement, unauthenticated/revoked rejection, pairing expiry/single use, credential issuance, permission denial, persisted recovery, heartbeat closure, and slow-subscriber isolation in eleven transport tests.
+  - Smoke-tested the built `ompd serve` and `ompd pair` executables end to end.
+- Milestone 6 is next: native/browser control clients, reconnection/resume, retries, replicated reduction, and credential storage.

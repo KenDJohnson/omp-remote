@@ -47,8 +47,14 @@ pub struct AgentHandle {
 impl AgentHandle {
     #[must_use]
     pub fn spawn(agent_id: AgentId, config: AgentActorConfig) -> Self {
+        Self::spawn_with_snapshot(AgentSnapshot::initial(agent_id), config)
+    }
+
+    #[must_use]
+    pub fn spawn_with_snapshot(snapshot: AgentSnapshot, config: AgentActorConfig) -> Self {
+        let agent_id = snapshot.agent_id.clone();
         let (command_tx, command_rx) = mpsc::channel(64);
-        tokio::spawn(run_agent_actor(agent_id.clone(), config, command_rx));
+        tokio::spawn(run_agent_actor(snapshot, config, command_rx));
         Self {
             agent_id,
             command_tx,
@@ -329,12 +335,12 @@ struct ActorState {
 }
 
 async fn run_agent_actor(
-    agent_id: AgentId,
+    snapshot: AgentSnapshot,
     config: AgentActorConfig,
     mut command_rx: mpsc::Receiver<ActorCommand>,
 ) {
     let mut state = ActorState {
-        snapshot: AgentSnapshot::initial(agent_id),
+        snapshot,
         replay: VecDeque::with_capacity(config.replay_capacity.get()),
         replay_capacity: config.replay_capacity.get(),
         subscriber_capacity: config.subscriber_capacity.get(),

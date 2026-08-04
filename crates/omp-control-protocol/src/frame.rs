@@ -73,7 +73,7 @@ pub enum ClientFrame {
     Request(RequestEnvelope),
     Subscribe(SubscribeRequest),
     Unsubscribe(UnsubscribeRequest),
-    UiResponse(ExtensionUiResponseFrame),
+    UiResponse(UiResponseEnvelope),
     Ping(Ping),
 }
 
@@ -86,7 +86,7 @@ pub enum ServerFrame {
     Delta(DeltaEnvelope),
     Event(EventEnvelope),
     ReplayGap(ReplayGap),
-    InteractionRequest(ExtensionUiRequestFrame),
+    InteractionRequest(UiInteractionEnvelope),
     Error(ProtocolError),
     Pong(Pong),
     ServerShutdown(ServerShutdown),
@@ -195,6 +195,8 @@ pub struct ServerWelcome {
     pub device_id: DeviceId,
     pub capabilities: ServerCapabilities,
     pub heartbeat_interval_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_credential: Option<DeviceCredential>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +365,21 @@ pub struct UnsubscribeRequest {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiResponseEnvelope {
+    pub agent_id: AgentId,
+    pub holder: LeaseHolderId,
+    pub response: ExtensionUiResponseFrame,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiInteractionEnvelope {
+    pub agent_id: AgentId,
+    pub request: ExtensionUiRequestFrame,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
     pub agents: Vec<AgentSnapshot>,
 }
@@ -460,4 +477,24 @@ pub struct DeviceCredential {
     pub device_id: DeviceId,
     pub token: DeviceToken,
     pub scopes: DeviceScopes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingBundle {
+    pub format_version: u16,
+    pub server_id: ServerId,
+    pub endpoint: String,
+    pub pairing_id: PairingId,
+    pub secret: PairingSecret,
+    pub expires_at_ms: u64,
+    pub tls_identity: TlsIdentityHint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum TlsIdentityHint {
+    PubliclyTrusted,
+    InsecureDevelopment,
+    Sha256Fingerprint(String),
 }

@@ -45,6 +45,7 @@ fn client_and_server_frames_round_trip_as_one_cbor_message() {
             max_frame_bytes: DEFAULT_POST_AUTH_FRAME_BYTES,
         },
         heartbeat_interval_ms: 15_000,
+        issued_credential: None,
     });
     let encoded = FrameLimits::default()
         .codec(ConnectionPhase::Authenticated)
