@@ -19,4 +19,10 @@
   - Added a fixed CBOR compatibility vector, optional-field compatibility coverage, unsupported-version rejection, and matching native/browser-WASM encoding tests.
   - Added a Nix flake WASM protocol check and the pinned flake-provided linker/test runner required to execute it.
   - Verified native protocol/control-plane tests, warning-free clippy, `wasm32-unknown-unknown` compilation, and the executed WASM golden-vector test.
-- Milestone 4 is next: SQLite metadata, credentials, pairing records, and operation idempotency.
+- Completed Milestone 4:
+  - Added `ompd` SQLite persistence for stable server identity, agent/process metadata, session resume cursors, scoped device records, token hashes, and revocation.
+  - Added random 256-bit single-use pairing secrets with hashed storage, expiry, constant-time verification, and consumed-state persistence.
+  - Added persistent operation claims/outcomes keyed by device and operation ID, conflict detection, indeterminate crash recovery, and age/count pruning.
+  - Verified interrupted-process recovery, stable identity/session metadata, restart-safe revocation, raw-secret exclusion/redacted debug output, pairing expiry/single-use behavior, and prompt deduplication across retries/restarts.
+  - Verified with `cargo test -p ompd` and warning-free `cargo clippy -p ompd --all-targets -- -D warnings`.
+- Milestone 5 is next: TLS-only WebSocket transport, authenticated sessions, pairing CLI, permissions, and backpressure.

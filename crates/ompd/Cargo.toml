@@ -1,0 +1,17 @@
+[package]
+name = "ompd"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+getrandom.workspace = true
+omp-control-protocol = { path = "../omp-control-protocol" }
+rusqlite.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

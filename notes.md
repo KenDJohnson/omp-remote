@@ -21,6 +21,11 @@
 - Mutating request envelopes require stable operation IDs; read-only requests reject them to keep deduplication semantics unambiguous.
 - CBOR encoding writes through a bounded writer, so oversized frames fail without first allocating the oversized output.
 - The browser-WASM test executes the same ping encoding against the native golden vector. `wasm-bindgen-test` is pinned to the version shipped by nixpkgs' `wasm-bindgen-cli`.
+- SQLite stores explicit fixed-width columns for scopes/cursors/lifecycle plus CBOR only for typed operation outcomes; schema versioning uses `PRAGMA user_version`.
+- Stable server IDs are generated once and loaded from metadata on every restart.
+- Device tokens and pairing secrets are SHA-256 hashed before storage and compared in constant time. Random 256-bit pairing secrets use base64url only at the out-of-band boundary.
+- Pending operations become indeterminate after daemon restart. They are never blindly re-executed, preventing duplicate prompts when execution may have completed before the outcome was persisted.
+- Active processes become interrupted and lose volatile process/run IDs on startup; durable session resume metadata remains intact.
 
 ### Questions for later
 
