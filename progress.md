@@ -40,4 +40,13 @@
   - Added a replicated-state reducer that applies snapshots, revisions, streamed events, and UI interactions to one cursor and fails closed until a fresh snapshot after any sequence/revision gap.
   - Verified prompt and UI-response retry identity, credential transition after pairing, contiguous replay/fresh-snapshot recovery, native pinned TLS, browser adapter constraints, and native/browser-WASM state convergence.
   - Verified with native and WASM client tests plus warning-free `cargo clippy -p omp-control-client --all-targets -- -D warnings`.
-- Milestone 7 is next: shared Dioxus applications for desktop, web, Android, and iOS.
+- Completed Milestone 7:
+  - Added one shared Dioxus 0.7 application crate with web, desktop, Android, and iOS entry points selected by target.
+  - Added persisted server profiles, browser fragment/deep-link pairing intake, QR image decoding, native secure credential storage, browser local storage, and reconnecting client startup.
+  - Added responsive agent and device navigation, live lifecycle/revision status, streamed transcript rendering, prompt/steer/follow-up/session controls, exclusive UI interaction handling, and device revocation.
+  - Added shared model, pairing, QR, and rendering tests; verified the desktop host build and both debug and production web builds.
+  - Exercised the production web bundle against a live `ompd` plus deterministic OMP fixture: pairing, saved-credential reconnect, agent launch, prompt lifecycle, ordered state/event delivery, interaction lease/response, and device administration all completed in-browser.
+- Fixed two issues found during the browser smoke test:
+  - Routed all sequenced agent deltas, interaction requests, and events through one ordered outbound lane so priority scheduling cannot manufacture client cursor gaps.
+  - Added SIGTERM handling to the daemon so supervised shutdown runs controller cleanup and removes the local administration socket before restart.
+- Final workspace verification passed with `direnv exec . nix flake check`, including audit, deny, formatting, documentation, warning-free Clippy, native tests, browser-WASM client/protocol tests, and the browser-WASM app check.

@@ -149,6 +149,19 @@ pub struct DeviceDescriptor {
     pub name: String,
     pub platform: ClientPlatform,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSummary {
+    pub device_id: DeviceId,
+    pub name: String,
+    pub platform: ClientPlatform,
+    pub scopes: DeviceScopes,
+    pub created_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at_ms: Option<u64>,
+}
 
 macro_rules! secret_string {
     ($name:ident) => {
@@ -273,6 +286,10 @@ pub enum ControlRequest {
     GetAgent {
         agent_id: AgentId,
     },
+    ListDevices,
+    RevokeDevice {
+        device_id: DeviceId,
+    },
     LaunchAgent {
         agent_id: AgentId,
     },
@@ -325,7 +342,10 @@ pub enum ControlRequest {
 impl ControlRequest {
     #[must_use]
     pub fn is_mutating(&self) -> bool {
-        !matches!(self, Self::ListAgents | Self::GetAgent { .. })
+        !matches!(
+            self,
+            Self::ListAgents | Self::GetAgent { .. } | Self::ListDevices
+        )
     }
 }
 
@@ -349,6 +369,8 @@ pub enum ControlResponse {
     Accepted,
     Agents { agents: Vec<AgentSnapshot> },
     Agent { agent: Box<AgentSnapshot> },
+    Devices { devices: Vec<DeviceSummary> },
+    DeviceRevoked { device_id: DeviceId },
     PromptAccepted { run_id: RunId },
     InteractionLease { lease: InteractionLease },
     InteractionReleased,

@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use omp_control_plane::{AgentHandle, AgentRegistry};
 use omp_control_protocol::{
-    AgentId, AgentLifecycle, AgentSnapshot, ControlRequest, ControlResponse, EventSequence,
-    InteractionState, LeaseHolderId, ProtocolError, ResponseOutcome, RunId, RunLifecycle,
-    RunSnapshot, SessionSummary, StateRevision,
+    AgentId, AgentLifecycle, AgentSnapshot, ControlRequest, ControlResponse, DeviceId,
+    DeviceSummary, EventSequence, InteractionState, LeaseHolderId, ProtocolError, ResponseOutcome,
+    RunId, RunLifecycle, RunSnapshot, SessionSummary, StateRevision,
 };
 use omp_rpc::{ClientMessage, CommandKind, Response, SessionEvent, SuccessResponse};
 use omp_runtime::{OmpRuntime, RuntimeConfig, RuntimeEvent, RuntimeStatus};
@@ -161,6 +161,36 @@ impl DaemonController {
                     }
                 }
                 Ok(ControlResponse::Agents { agents })
+            }
+            ControlRequest::ListDevices => {
+                let devices = self
+                    .store
+                    .lock()
+                    .devices()
+                    .map_err(|error| ControllerError::Persistence(error.to_string()))?
+                    .into_iter()
+                    .map(|record| DeviceSummary {
+                        device_id: record.device_id,
+                        name: record.name,
+                        platform: record.platform,
+                        scopes: record.scopes,
+                        created_at_ms: record.created_at_ms,
+                        last_seen_at_ms: record.last_seen_at_ms,
+                        revoked_at_ms: record.revoked_at_ms,
+                    })
+                    .collect();
+                Ok(ControlResponse::Devices { devices })
+            }
+            ControlRequest::RevokeDevice { device_id } => {
+                let revoked = self
+                    .store
+                    .lock()
+                    .revoke_device(&device_id, unix_time_ms())
+                    .map_err(|error| ControllerError::Persistence(error.to_string()))?;
+                if !revoked {
+                    return Err(ControllerError::DeviceNotFound(device_id));
+                }
+                Ok(ControlResponse::DeviceRevoked { device_id })
             }
             ControlRequest::GetAgent { agent_id } => {
                 let agent = self.agent(&agent_id)?;
@@ -559,6 +589,7 @@ pub fn unix_time_ms() -> u64 {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ControllerError {
     NotFound(AgentId),
+    DeviceNotFound(DeviceId),
     NotRunning(AgentId),
     AlreadyRunning(AgentId),
     InteractionLeaseRequired,
@@ -587,6 +618,11 @@ impl ControllerError {
                 format!("agent {agent_id} is already running"),
                 false,
             ),
+            Self::DeviceNotFound(device_id) => (
+                "device_not_found".into(),
+                format!("active device {device_id} was not found"),
+                false,
+            ),
             Self::InteractionLeaseRequired => (
                 "interaction_lease_required".into(),
                 "an active interaction lease owned by this client is required".into(),
@@ -610,6 +646,9 @@ impl fmt::Display for ControllerError {
         match self {
             Self::NotFound(agent_id) => write!(formatter, "agent {agent_id} was not found"),
             Self::NotRunning(agent_id) => write!(formatter, "agent {agent_id} is not running"),
+            Self::DeviceNotFound(device_id) => {
+                write!(formatter, "active device {device_id} was not found")
+            }
             Self::AlreadyRunning(agent_id) => {
                 write!(formatter, "agent {agent_id} is already running")
             }

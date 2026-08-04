@@ -13,7 +13,7 @@ use omp_control_protocol::{
     ResponseOutcome, RunId, ServerId, StateRevision,
 };
 use parking_lot::{Mutex, MutexGuard};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -309,6 +309,22 @@ impl Store {
     pub fn device(&self, device_id: &DeviceId) -> Result<Option<DeviceRecord>, StoreError> {
         let connection = self.connection();
         load_device(&connection, device_id)
+    }
+    pub fn devices(&self) -> Result<Vec<DeviceRecord>, StoreError> {
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            r#"
+            SELECT device_id, name, platform,
+                   scope_observe, scope_prompt, scope_mutate_session,
+                   scope_stop_agent, scope_answer_ui, scope_administer_devices,
+                   created_at_ms, last_seen_at_ms, revoked_at_ms
+            FROM devices
+            ORDER BY created_at_ms, device_id
+            "#,
+        )?;
+        let rows = statement.query_map([], raw_device)?;
+        rows.map(|raw| raw.map_err(StoreError::from).and_then(decode_device))
+            .collect()
     }
 
     pub fn authenticate_device(
@@ -702,11 +718,26 @@ fn load_or_create_server_id(connection: &mut Connection) -> Result<ServerId, Sto
     Ok(server_id)
 }
 
+type RawDevice = (
+    String,
+    String,
+    String,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    i64,
+    Option<i64>,
+    Option<i64>,
+);
+
 fn load_device(
     connection: &Connection,
     device_id: &DeviceId,
 ) -> Result<Option<DeviceRecord>, StoreError> {
-    let raw = connection
+    connection
         .query_row(
             r#"
             SELECT device_id, name, platform,
@@ -716,63 +747,67 @@ fn load_device(
             FROM devices WHERE device_id = ?1
             "#,
             [device_id.as_str()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, bool>(3)?,
-                    row.get::<_, bool>(4)?,
-                    row.get::<_, bool>(5)?,
-                    row.get::<_, bool>(6)?,
-                    row.get::<_, bool>(7)?,
-                    row.get::<_, bool>(8)?,
-                    row.get::<_, i64>(9)?,
-                    row.get::<_, Option<i64>>(10)?,
-                    row.get::<_, Option<i64>>(11)?,
-                ))
-            },
+            raw_device,
         )
-        .optional()?;
-    raw.map(
-        |(
-            device_id,
-            name,
-            platform,
+        .optional()?
+        .map(decode_device)
+        .transpose()
+}
+
+fn raw_device(row: &Row<'_>) -> rusqlite::Result<RawDevice> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+    ))
+}
+
+fn decode_device(
+    (
+        device_id,
+        name,
+        platform,
+        observe,
+        prompt,
+        mutate_session,
+        stop_agent,
+        answer_ui,
+        administer_devices,
+        created_at_ms,
+        last_seen_at_ms,
+        revoked_at_ms,
+    ): RawDevice,
+) -> Result<DeviceRecord, StoreError> {
+    Ok(DeviceRecord {
+        device_id: DeviceId::new(device_id)
+            .map_err(|error| StoreError::CorruptData(error.to_string()))?,
+        name,
+        platform: decode_platform(&platform)?,
+        scopes: DeviceScopes {
             observe,
             prompt,
             mutate_session,
             stop_agent,
             answer_ui,
             administer_devices,
-            created_at_ms,
-            last_seen_at_ms,
-            revoked_at_ms,
-        )| {
-            Ok(DeviceRecord {
-                device_id: DeviceId::new(device_id)
-                    .map_err(|error| StoreError::CorruptData(error.to_string()))?,
-                name,
-                platform: decode_platform(&platform)?,
-                scopes: DeviceScopes {
-                    observe,
-                    prompt,
-                    mutate_session,
-                    stop_agent,
-                    answer_ui,
-                    administer_devices,
-                },
-                created_at_ms: wire_u64(created_at_ms, "device created_at_ms")?,
-                last_seen_at_ms: last_seen_at_ms
-                    .map(|value| wire_u64(value, "device last_seen_at_ms"))
-                    .transpose()?,
-                revoked_at_ms: revoked_at_ms
-                    .map(|value| wire_u64(value, "device revoked_at_ms"))
-                    .transpose()?,
-            })
         },
-    )
-    .transpose()
+        created_at_ms: wire_u64(created_at_ms, "device created_at_ms")?,
+        last_seen_at_ms: last_seen_at_ms
+            .map(|value| wire_u64(value, "device last_seen_at_ms"))
+            .transpose()?,
+        revoked_at_ms: revoked_at_ms
+            .map(|value| wire_u64(value, "device revoked_at_ms"))
+            .transpose()?,
+    })
 }
 
 #[derive(Debug)]

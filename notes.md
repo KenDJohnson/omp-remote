@@ -32,7 +32,7 @@
 - Pairing credential exchange consumes the single-use secret and inserts the hashed per-device token in one SQLite transaction, so a crash cannot consume a secret without issuing its device record.
 - Pairing creation is available only through a `0600` Unix socket. QR and browser payloads use URL fragments; the browser link therefore does not transmit the pairing secret in the HTTP request.
 - UI interaction request/response envelopes carry the agent ID, and responses additionally carry the lease holder ID so the daemon can enforce ownership before forwarding to OMP.
-- Network delivery uses bounded priority lanes. Subscription tasks use non-blocking enqueue and emit an explicit replay gap on overflow, keeping control-plane actors independent of socket backpressure.
+- Control, response, and sequenced-agent traffic use bounded priority lanes, but every delta, interaction request, lifecycle event, and streaming event for an agent shares one ordered lane. Subscription tasks use non-blocking enqueue and emit an explicit replay gap on overflow, keeping control-plane actors independent of socket backpressure without reordering event sequences.
 - Persisted agent/session cursors seed restored actor snapshots. Since replay buffers are intentionally volatile, any client behind a restored cursor receives a snapshot/resynchronization path rather than fabricated replay.
 - The daemon controller now owns runtime launch, prompt, steering, abort, session switch, and graceful shutdown wiring; stable operation outcomes wrap mutating dispatch before execution.
 - The control client separates transport (`WebSocketAdapter`/`BinaryWebSocket`), credential persistence, replicated state, and the reconnecting runner so Dioxus platform shells can supply only platform-specific adapters and storage.
@@ -41,6 +41,14 @@
 - The replicated reducer marks an agent as requiring resynchronization after any revision or event-sequence failure, suppresses its resume cursor, and rejects further incremental updates until a fresh snapshot arrives.
 - Browser clients reject certificate fingerprints because Web APIs do not expose peer certificates. Native clients implement fingerprint pinning with Rustls signature verification delegated to WebPKI.
 
+- The Dioxus application has one target-neutral model/view/action layer. Target-specific startup supplies only the WebSocket adapter, credential store, profile store, clock, and platform descriptor.
+- Native credentials use the OS secure store; browser credentials use origin-scoped local storage under a versioned namespace. Native and browser server profiles persist separately from credential secrets.
+- Browser pairing consumes the URL fragment and clears it before connecting. QR intake decodes the same versioned pairing bundle used by native deep links, with the control-protocol CBOR frame limit as the image-decoder allocation ceiling.
+- UI response actions acquire the daemon's exclusive lease immediately before forwarding the response and release it after a successful response. Competing clients remain read-only and receive authoritative lease state.
+- The Dioxus dependency and the Nix-provided `dx` CLI are aligned at 0.7.9; mismatched minor patch releases caused a persistent development overlay and were not accepted as a deployment workaround.
+- Per-agent event sequences are a wire-order invariant. Prioritizing deltas above streamed events on separate queues violated that invariant; all sequenced agent frames now use the state lane while authentication and command responses retain higher priority.
+- Daemon supervision must treat SIGTERM like Ctrl-C. Handling both lets the admin-socket guard unlink its path and lets the controller shut down child runtimes before process exit.
+
 ### Questions for later
 
-- None yet.
+- Android and iOS artifact builds still require their platform SDKs and Rust standard-library targets; the current Nix shell verifies the shared desktop host and browser-WASM paths but does not provision those mobile SDKs.

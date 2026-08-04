@@ -1,0 +1,39 @@
+[package]
+name = "omp-app"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+dioxus = { workspace = true, features = ["minimal"] }
+futures-channel.workspace = true
+futures-util.workspace = true
+image.workspace = true
+omp-control-client = { path = "../omp-control-client" }
+omp-control-protocol = { path = "../omp-control-protocol" }
+omp-rpc = { path = "../omp-rpc" }
+rqrr.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus = { workspace = true, features = ["web"] }
+js-sys.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys = { workspace = true, features = ["Location", "Storage", "Window"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+directories.workspace = true
+tokio.workspace = true
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+dioxus = { workspace = true, features = ["mobile"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(any(target_os = "android", target_os = "ios"))))'.dependencies]
+dioxus = { workspace = true, features = ["desktop"] }
+
+[dev-dependencies]
+base64.workspace = true
+serde_json.workspace = true
+qrcode = { workspace = true, features = ["image"] }

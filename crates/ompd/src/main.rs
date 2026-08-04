@@ -128,12 +128,20 @@ async fn serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
     let service_result: Result<(), Box<dyn std::error::Error>> = tokio::select! {
         result = server.serve() => result.map_err(Into::into),
         result = serve_admin_socket(args.admin_socket, store, transport) => result.map_err(Into::into),
-        signal = tokio::signal::ctrl_c() => signal.map_err(Into::into),
+        signal = shutdown_signal() => signal.map_err(Into::into),
     };
     let shutdown_result = controller.shutdown().await;
     service_result?;
     shutdown_result?;
     Ok(())
+}
+
+async fn shutdown_signal() -> std::io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
 }
 
 fn build_tls_mode(args: &ServeArgs) -> Result<TlsMode, String> {

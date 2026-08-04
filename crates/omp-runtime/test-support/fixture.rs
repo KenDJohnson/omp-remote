@@ -52,6 +52,22 @@ fn main() -> io::Result<()> {
                     write_frame(&mut stdout, &json!({ "type": "agent_start" }))?;
                     write_frame(&mut stdout, &json!({ "type": "agent_end", "messages": [] }))?;
                 }
+                Some("interaction") => {
+                    write_frame(
+                        &mut stdout,
+                        &success(request_id, "prompt", Some(json!({ "agentInvoked": true }))),
+                    )?;
+                    write_frame(
+                        &mut stdout,
+                        &json!({
+                            "type": "extension_ui_request",
+                            "id": "fixture-ui-1",
+                            "method": "select",
+                            "title": "Choose a fixture option",
+                            "options": ["Alpha", "Beta"]
+                        }),
+                    )?;
+                }
                 Some("late-local") => {
                     write_frame(&mut stdout, &success(request_id.clone(), "prompt", None))?;
                     write_frame(
@@ -78,6 +94,9 @@ fn main() -> io::Result<()> {
                     &success(request_id, "prompt", Some(json!({ "agentInvoked": false }))),
                 )?,
             },
+            Some("extension_ui_response") => {
+                write_frame(&mut stdout, &json!({ "type": "agent_end", "messages": [] }))?;
+            }
             Some("abort") => write_frame(&mut stdout, &success(request_id, "abort", None))?,
             Some(command) => write_frame(
                 &mut stdout,

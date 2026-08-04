@@ -10,10 +10,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use omp_control_protocol::{
     AgentId, AgentLifecycle, CborCodec, ClientAuthentication, ClientCapabilities, ClientDescriptor,
-    ClientFrame, ClientHello, ClientPlatform, ConnectionPhase, ControlRequest, DeviceDescriptor,
-    DeviceId, DeviceScopes, DeviceToken, EventSequence, FrameLimits, OperationId, PairingBundle,
-    ProtocolVersion, RequestEnvelope, RequestId, ResponseOutcome, ResumeState, ServerFrame,
-    StateRevision, SubscribeRequest, TlsIdentityHint,
+    ClientFrame, ClientHello, ClientPlatform, ConnectionPhase, ControlRequest, ControlResponse,
+    DeviceDescriptor, DeviceId, DeviceScopes, DeviceToken, EventSequence, FrameLimits, OperationId,
+    PairingBundle, ProtocolVersion, RequestEnvelope, RequestId, ResponseOutcome, ResumeState,
+    ServerFrame, StateRevision, SubscribeRequest, TlsIdentityHint,
 };
 use omp_rpc::{ServerMessage, SessionEvent};
 use omp_runtime::RuntimeConfig;
@@ -259,6 +259,95 @@ async fn device_scopes_are_enforced_before_mutating_dispatch() {
         panic!("read-only device must not launch an agent");
     };
     assert_eq!(error.code, "permission_denied");
+    fixture.stop();
+}
+
+#[tokio::test]
+async fn device_administrators_can_list_and_revoke_devices() {
+    let fixture = PlainServer::start().await;
+    let admin_token = DeviceToken::new("admin-token");
+    let admin = device_record("admin", DeviceScopes::all());
+    let victim_token = DeviceToken::new("victim-token");
+    let victim = device_record("victim", observe_only());
+    fixture
+        .store
+        .lock()
+        .insert_device(&admin, &admin_token)
+        .unwrap();
+    fixture
+        .store
+        .lock()
+        .insert_device(&victim, &victim_token)
+        .unwrap();
+
+    let (mut socket, _) = connect_async(fixture.url()).await.unwrap();
+    send_client(
+        &mut socket,
+        &device_hello(&admin.device_id, admin_token),
+        ConnectionPhase::PreAuth,
+    )
+    .await;
+    assert!(matches!(
+        receive_server(&mut socket).await,
+        ServerFrame::Welcome(_)
+    ));
+    send_client(
+        &mut socket,
+        &ClientFrame::Request(RequestEnvelope {
+            request_id: RequestId::new("list-devices").unwrap(),
+            operation_id: None,
+            request: ControlRequest::ListDevices,
+        }),
+        ConnectionPhase::Authenticated,
+    )
+    .await;
+    let ServerFrame::Response(response) = receive_server(&mut socket).await else {
+        panic!("list devices must receive a response")
+    };
+    let ResponseOutcome::Success(response) = response.outcome else {
+        panic!("device administrator must list devices")
+    };
+    let ControlResponse::Devices { devices } = *response else {
+        panic!("expected device list")
+    };
+    assert_eq!(devices.len(), 2);
+    assert!(
+        devices
+            .iter()
+            .any(|device| device.device_id == victim.device_id)
+    );
+
+    send_client(
+        &mut socket,
+        &ClientFrame::Request(RequestEnvelope {
+            request_id: RequestId::new("revoke-device").unwrap(),
+            operation_id: Some(OperationId::new("revoke-operation").unwrap()),
+            request: ControlRequest::RevokeDevice {
+                device_id: victim.device_id.clone(),
+            },
+        }),
+        ConnectionPhase::Authenticated,
+    )
+    .await;
+    let ServerFrame::Response(response) = receive_server(&mut socket).await else {
+        panic!("revoke device must receive a response")
+    };
+    assert!(matches!(
+        response.outcome,
+        ResponseOutcome::Success(response)
+            if matches!(
+                *response,
+                ControlResponse::DeviceRevoked { ref device_id }
+                    if device_id == &victim.device_id
+            )
+    ));
+    assert!(matches!(
+        fixture
+            .store
+            .lock()
+            .authenticate_device(&victim.device_id, &victim_token, unix_time_ms()),
+        Err(ompd::persistence::DeviceAuthenticationError::Revoked)
+    ));
     fixture.stop();
 }
 

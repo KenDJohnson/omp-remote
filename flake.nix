@@ -27,7 +27,12 @@
         inherit (pkgs) lib;
 
         craneLib = inputs.crane.mkLib pkgs;
-        src = craneLib.cleanCargoSource ./.;
+        src = lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (craneLib.filterCargoSources path type)
+            || lib.hasSuffix ".css" path;
+        };
         workspace = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         hasWorkspaceMembers = workspace.workspace.members != [];
 
@@ -90,6 +95,13 @@
                 nativeBuildInputs = [pkgs.lld pkgs.nodejs pkgs.wasm-bindgen-cli];
               });
 
+            wasm-app = craneLib.cargoClippy (commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "-p omp-app --target wasm32-unknown-unknown --all-targets -- --deny warnings";
+                nativeBuildInputs = [pkgs.lld];
+              });
+
             wasm-protocol = craneLib.cargoTest (commonArgs
               // {
                 inherit cargoArtifacts;
@@ -102,11 +114,14 @@
         devShells.default = craneLib.devShell {
           packages = with pkgs; [
             alejandra
+            binaryen
             cargo-audit
             cargo-deny
             cargo-nextest
+            dioxus-cli
             lld
             nodejs
+            static-web-server
             rust-analyzer
             taplo
             wasm-bindgen-cli

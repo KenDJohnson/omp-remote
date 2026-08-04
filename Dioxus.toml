@@ -1,0 +1,5 @@
+[application]
+name = "omp-remote"
+
+[web.app]
+title = "OMP Remote"

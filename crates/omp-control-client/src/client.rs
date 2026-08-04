@@ -30,6 +30,7 @@ pub struct ClientHandle {
     state: Arc<RwLock<ReplicatedState>>,
     status: Arc<RwLock<ConnectionStatus>>,
     ids: Arc<Mutex<IdGenerator>>,
+    subscribers: Arc<Mutex<Vec<mpsc::Sender<ClientEvent>>>>,
     event_subscriber_capacity: usize,
 }
 
@@ -45,10 +46,10 @@ impl ClientHandle {
     }
 
     pub fn events(&self) -> Result<mpsc::Receiver<ClientEvent>, RequestError> {
-        let (sender, receiver) = mpsc::channel(self.event_subscriber_capacity.max(1));
-        self.commands
-            .unbounded_send(ClientCommand::AddEventSubscriber(sender))
-            .map_err(|_| RequestError::ClientStopped)?;
+        let (mut sender, receiver) = mpsc::channel(self.event_subscriber_capacity.max(1));
+        let mut subscribers = self.subscribers.lock();
+        let _ = sender.try_send(ClientEvent::ConnectionChanged(self.status()));
+        subscribers.push(sender);
         Ok(receiver)
     }
 
@@ -136,7 +137,7 @@ pub struct ClientRunner<S> {
     state: Arc<RwLock<ReplicatedState>>,
     status: Arc<RwLock<ConnectionStatus>>,
     ids: Arc<Mutex<IdGenerator>>,
-    subscribers: Vec<mpsc::Sender<ClientEvent>>,
+    subscribers: Arc<Mutex<Vec<mpsc::Sender<ClientEvent>>>>,
     desired_subscriptions: BTreeSet<AgentId>,
     pending: BTreeMap<u64, PendingRequest>,
     response_index: BTreeMap<RequestId, u64>,
@@ -156,11 +157,13 @@ where
         let state = Arc::new(RwLock::new(ReplicatedState::default()));
         let status = Arc::new(RwLock::new(ConnectionStatus::Disconnected { reason: None }));
         let (command_tx, command_rx) = mpsc::unbounded();
+        let subscribers = Arc::new(Mutex::new(Vec::new()));
         let handle = ClientHandle {
             commands: command_tx,
             state: Arc::clone(&state),
             status: Arc::clone(&status),
             ids: Arc::clone(&ids),
+            subscribers: Arc::clone(&subscribers),
             event_subscriber_capacity: config.event_subscriber_capacity,
         };
         Ok((
@@ -172,7 +175,7 @@ where
                 state,
                 status,
                 ids,
-                subscribers: Vec::new(),
+                subscribers,
                 desired_subscriptions: BTreeSet::new(),
                 pending: BTreeMap::new(),
                 response_index: BTreeMap::new(),
@@ -571,10 +574,6 @@ where
                     .await?;
                 }
             }
-            ClientCommand::AddEventSubscriber(mut sender) => {
-                let _ = sender.try_send(ClientEvent::ConnectionChanged(self.status()));
-                self.subscribers.push(sender);
-            }
             ClientCommand::Shutdown(acknowledge) => {
                 let _ = acknowledge.send(());
                 self.fail_pending(RequestError::ClientStopped);
@@ -677,10 +676,6 @@ where
             }
             ClientCommand::Unsubscribe(agent_id) => {
                 self.desired_subscriptions.remove(&agent_id);
-            }
-            ClientCommand::AddEventSubscriber(mut sender) => {
-                let _ = sender.try_send(ClientEvent::ConnectionChanged(self.status()));
-                self.subscribers.push(sender);
             }
             ClientCommand::Shutdown(acknowledge) => {
                 let _ = acknowledge.send(());
@@ -860,12 +855,9 @@ where
         self.broadcast(ClientEvent::ConnectionChanged(status));
     }
 
-    fn status(&self) -> ConnectionStatus {
-        self.status.read().clone()
-    }
-
-    fn broadcast(&mut self, event: ClientEvent) {
+    fn broadcast(&self, event: ClientEvent) {
         self.subscribers
+            .lock()
             .retain_mut(|subscriber| match subscriber.try_send(event.clone()) {
                 Ok(()) => true,
                 Err(error) => error.is_full(),
@@ -1031,7 +1023,6 @@ enum ClientCommand {
     },
     Subscribe(AgentId),
     Unsubscribe(AgentId),
-    AddEventSubscriber(mpsc::Sender<ClientEvent>),
     Shutdown(oneshot::Sender<()>),
 }
 

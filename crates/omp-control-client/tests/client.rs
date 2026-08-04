@@ -5,7 +5,7 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 use omp_control_client::{
-    BinaryWebSocket, ClientConfig, ClientRunner, ConnectionStatus, CredentialStore,
+    BinaryWebSocket, ClientConfig, ClientEvent, ClientRunner, ConnectionStatus, CredentialStore,
     MemoryCredentialStore, SocketEvent, SocketTarget, TransportError, WebSocketAdapter,
 };
 use omp_control_protocol::{
@@ -190,6 +190,22 @@ impl Fixture {
             .unbounded_send(Ok(SocketEvent::Binary(self.codec.encode(&frame).unwrap())))
             .unwrap();
     }
+}
+#[tokio::test]
+async fn event_subscription_immediately_reports_current_status() {
+    let fixture = Fixture::new();
+    let (handle, _runner) =
+        ClientRunner::new(fixture.config(), fixture.credential_store.clone()).unwrap();
+    let mut events = handle.events().unwrap();
+
+    assert_eq!(
+        time::timeout(Duration::from_millis(100), events.next())
+            .await
+            .unwrap(),
+        Some(ClientEvent::ConnectionChanged(
+            ConnectionStatus::Disconnected { reason: None }
+        ))
+    );
 }
 
 #[tokio::test]

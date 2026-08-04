@@ -152,6 +152,12 @@ fn mutating_requests_require_stable_operation_ids() {
         request: ControlRequest::ListAgents,
     };
     assert_eq!(read.validate(), Ok(()));
+    let device_read = RequestEnvelope {
+        request_id: RequestId::new("request-devices").unwrap(),
+        operation_id: None,
+        request: ControlRequest::ListDevices,
+    };
+    assert_eq!(device_read.validate(), Ok(()));
 
     let mutation = RequestEnvelope {
         request_id: RequestId::new("request-2").unwrap(),
@@ -162,6 +168,17 @@ fn mutating_requests_require_stable_operation_ids() {
     };
     assert_eq!(
         mutation.validate(),
+        Err(RequestValidationError::MissingOperationId)
+    );
+    let revoke = RequestEnvelope {
+        request_id: RequestId::new("request-revoke").unwrap(),
+        operation_id: None,
+        request: ControlRequest::RevokeDevice {
+            device_id: DeviceId::new("device-2").unwrap(),
+        },
+    };
+    assert_eq!(
+        revoke.validate(),
         Err(RequestValidationError::MissingOperationId)
     );
 }

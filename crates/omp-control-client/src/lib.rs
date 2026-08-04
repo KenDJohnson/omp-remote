@@ -8,6 +8,7 @@ mod client;
 mod config;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+mod pairing;
 mod reducer;
 mod storage;
 
@@ -18,6 +19,7 @@ pub use client::*;
 pub use config::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
+pub use pairing::*;
 pub use reducer::*;
 pub use storage::*;
 

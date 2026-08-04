@@ -24,7 +24,7 @@ use omp_control_protocol::{
     ServerCapabilities, ServerFrame, ServerWelcome, StateSnapshot, SubscribeRequest,
     SubscriptionStart, UiInteractionEnvelope, UiResponseEnvelope, negotiate_client_hello,
 };
-use omp_rpc::{ServerMessage, SessionEvent};
+use omp_rpc::ServerMessage;
 use omp_runtime::RuntimeConfig;
 use parking_lot::Mutex;
 use tokio::{
@@ -463,6 +463,9 @@ async fn execute_request(
 fn authorized(scopes: &DeviceScopes, request: &ControlRequest) -> bool {
     match request {
         ControlRequest::ListAgents | ControlRequest::GetAgent { .. } => scopes.observe,
+        ControlRequest::ListDevices | ControlRequest::RevokeDevice { .. } => {
+            scopes.administer_devices
+        }
         ControlRequest::LaunchAgent { .. } | ControlRequest::SwitchSession { .. } => {
             scopes.mutate_session
         }
@@ -570,34 +573,23 @@ fn emit_update(update: AgentUpdate, outbound: &Outbound) -> bool {
             agent_id,
             event_sequence,
             event,
-        } => match event {
-            ServerMessage::ExtensionUi(request) => {
-                outbound.interaction(ServerFrame::InteractionRequest(UiInteractionEnvelope {
-                    agent_id,
-                    event_sequence,
-                    request,
-                }))
-            }
-            event => {
-                let is_streaming = matches!(
-                    event,
-                    ServerMessage::SessionEvent(
-                        SessionEvent::MessageUpdate { .. }
-                            | SessionEvent::ToolExecutionUpdate { .. }
-                    )
-                );
-                let frame = ServerFrame::Event(EventEnvelope {
-                    agent_id,
-                    event_sequence,
-                    event,
-                });
-                if is_streaming {
-                    outbound.streaming(frame)
-                } else {
-                    outbound.event(frame)
+        } => {
+            let frame = match event {
+                ServerMessage::ExtensionUi(request) => {
+                    ServerFrame::InteractionRequest(UiInteractionEnvelope {
+                        agent_id,
+                        event_sequence,
+                        request,
+                    })
                 }
-            }
-        },
+                event => ServerFrame::Event(EventEnvelope {
+                    agent_id,
+                    event_sequence,
+                    event,
+                }),
+            };
+            outbound.state(frame)
+        }
     }
 }
 
@@ -619,9 +611,6 @@ struct Outbound {
     control: mpsc::Sender<OutboundPayload>,
     response: mpsc::Sender<OutboundPayload>,
     state: mpsc::Sender<OutboundPayload>,
-    interaction: mpsc::Sender<OutboundPayload>,
-    event: mpsc::Sender<OutboundPayload>,
-    streaming: mpsc::Sender<OutboundPayload>,
 }
 
 impl Outbound {
@@ -630,25 +619,17 @@ impl Outbound {
         let (control, control_rx) = mpsc::channel(capacity);
         let (response, response_rx) = mpsc::channel(capacity);
         let (state, state_rx) = mpsc::channel(capacity);
-        let (interaction, interaction_rx) = mpsc::channel(capacity);
-        let (event, event_rx) = mpsc::channel(capacity);
-        let (streaming, streaming_rx) = mpsc::channel(capacity);
+
         (
             Self {
                 control,
                 response,
                 state,
-                interaction,
-                event,
-                streaming,
             },
             OutboundQueues {
                 control: control_rx,
                 response: response_rx,
                 state: state_rx,
-                interaction: interaction_rx,
-                event: event_rx,
-                streaming: streaming_rx,
             },
         )
     }
@@ -679,24 +660,6 @@ impl Outbound {
             .try_send(OutboundPayload::Protocol(frame))
             .is_ok()
     }
-
-    fn interaction(&self, frame: ServerFrame) -> bool {
-        self.interaction
-            .try_send(OutboundPayload::Protocol(frame))
-            .is_ok()
-    }
-
-    fn event(&self, frame: ServerFrame) -> bool {
-        self.event
-            .try_send(OutboundPayload::Protocol(frame))
-            .is_ok()
-    }
-
-    fn streaming(&self, frame: ServerFrame) -> bool {
-        self.streaming
-            .try_send(OutboundPayload::Protocol(frame))
-            .is_ok()
-    }
 }
 
 #[derive(Debug)]
@@ -710,9 +673,6 @@ struct OutboundQueues {
     control: mpsc::Receiver<OutboundPayload>,
     response: mpsc::Receiver<OutboundPayload>,
     state: mpsc::Receiver<OutboundPayload>,
-    interaction: mpsc::Receiver<OutboundPayload>,
-    event: mpsc::Receiver<OutboundPayload>,
-    streaming: mpsc::Receiver<OutboundPayload>,
 }
 
 async fn run_writer(
@@ -731,9 +691,6 @@ async fn run_writer(
             Some(payload) = queues.control.recv() => payload,
             Some(payload) = queues.response.recv() => payload,
             Some(payload) = queues.state.recv() => payload,
-            Some(payload) = queues.interaction.recv() => payload,
-            Some(payload) = queues.event.recv() => payload,
-            Some(payload) = queues.streaming.recv() => payload,
             _ = heartbeat.tick() => {
                 if Instant::now().saturating_duration_since(*activity.borrow())
                     > config.heartbeat_interval.saturating_mul(2)
@@ -830,5 +787,68 @@ impl From<ControllerError> for ServerError {
 impl From<std::io::Error> for ServerError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omp_control_protocol::{
+        AgentId, AgentLifecycle, AgentStateChange, EventSequence, StateDelta, StateRevision,
+    };
+    use omp_rpc::{ServerMessage, SessionEvent};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn sequenced_agent_updates_share_one_ordered_lane() {
+        let agent_id = AgentId::new("agent-1").unwrap();
+        let (outbound, mut queues) = Outbound::new(8);
+        let updates = [
+            AgentUpdate::Delta {
+                event_sequence: EventSequence(1),
+                delta: StateDelta {
+                    agent_id: agent_id.clone(),
+                    base_revision: StateRevision(0),
+                    revision: StateRevision(1),
+                    change: AgentStateChange::LifecycleChanged(AgentLifecycle::Running),
+                },
+            },
+            AgentUpdate::Event {
+                agent_id: agent_id.clone(),
+                event_sequence: EventSequence(2),
+                event: ServerMessage::SessionEvent(SessionEvent::AgentStart),
+            },
+            AgentUpdate::Delta {
+                event_sequence: EventSequence(3),
+                delta: StateDelta {
+                    agent_id,
+                    base_revision: StateRevision(1),
+                    revision: StateRevision(2),
+                    change: AgentStateChange::LifecycleChanged(AgentLifecycle::Idle),
+                },
+            },
+        ];
+        for update in updates {
+            assert!(emit_update(update, &outbound));
+        }
+
+        let mut sequences = Vec::new();
+        for _ in 0..3 {
+            let payload = time::timeout(Duration::from_millis(100), queues.state.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let sequence = match payload {
+                OutboundPayload::Protocol(ServerFrame::Delta(envelope)) => envelope.event_sequence,
+                OutboundPayload::Protocol(ServerFrame::Event(envelope)) => envelope.event_sequence,
+                payload => panic!("unexpected ordered payload: {payload:?}"),
+            };
+            sequences.push(sequence);
+        }
+
+        assert_eq!(
+            sequences,
+            [EventSequence(1), EventSequence(2), EventSequence(3)]
+        );
     }
 }
