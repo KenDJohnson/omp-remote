@@ -18,7 +18,7 @@ use tokio::{
 use crate::{
     AgentId, AgentLifecycle, AgentSnapshot, AgentStateChange, AgentUpdate, EventSequence,
     InteractionLease, InteractionState, LeaseHolderId, RunId, RunSnapshot, SessionSummary,
-    StateDelta, StateRevision, SubscriptionCursor, SubscriptionStart, state::apply_change,
+    StateDelta, StateRevision, SubscriptionCursor, SubscriptionStart,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -391,9 +391,7 @@ async fn run_agent_actor(
 
 impl ActorState {
     fn apply_change(&mut self, change: AgentStateChange) -> Result<Option<StateDelta>, AgentError> {
-        let mut projected = self.snapshot.clone();
-        apply_change(&mut projected, change.clone());
-        if projected == self.snapshot {
+        if !self.snapshot.would_change(&change) {
             return Ok(None);
         }
 
@@ -411,9 +409,9 @@ impl ActorState {
             revision,
             change,
         };
-        projected.revision = revision;
-        projected.event_sequence = event_sequence;
-        self.snapshot = projected;
+        self.snapshot
+            .apply_delta(delta.clone(), event_sequence)
+            .expect("the actor constructs contiguous state deltas");
         self.record(AgentUpdate::Delta {
             event_sequence,
             delta: delta.clone(),

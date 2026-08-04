@@ -5,6 +5,6 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+omp-control-protocol = { path = "../omp-control-protocol" }
 omp-rpc = { path = "../omp-rpc" }
-serde.workspace = true
 tokio.workspace = true

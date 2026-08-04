@@ -13,4 +13,10 @@
   - Added atomic actor subscriptions, contiguous bounded replay, explicit resynchronization on replay or subscriber gaps, and an exclusive expiring interaction lease.
   - Verified deterministic reducer convergence, identical subscriber ordering, missed-revision rejection, event-only cursor advancement, lease expiry, and slow-subscriber resynchronization in six tests.
   - Verified with `cargo test -p omp-control-plane` and warning-free `cargo clippy -p omp-control-plane --all-targets -- -D warnings`.
-- Milestone 3 is next: extract stable shared protocol DTOs and add versioned CBOR framing.
+- Completed Milestone 3:
+  - Added `omp-control-protocol` with versioned client/server frames, typed control envelopes, shared state DTOs, authentication hello types, capability negotiation, and operation-ID validation.
+  - Added bounded single-frame CBOR encoding/decoding with distinct pre-auth and authenticated limits plus trailing-frame rejection.
+  - Added a fixed CBOR compatibility vector, optional-field compatibility coverage, unsupported-version rejection, and matching native/browser-WASM encoding tests.
+  - Added a Nix flake WASM protocol check and the pinned flake-provided linker/test runner required to execute it.
+  - Verified native protocol/control-plane tests, warning-free clippy, `wasm32-unknown-unknown` compilation, and the executed WASM golden-vector test.
+- Milestone 4 is next: SQLite metadata, credentials, pairing records, and operation idempotency.

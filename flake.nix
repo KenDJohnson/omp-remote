@@ -82,6 +82,13 @@
               src = pkgs.lib.sources.sourceFilesBySuffices ./. [".toml"];
               taploExtraArgs = "--config ./taplo.toml";
             };
+
+            wasm-protocol = craneLib.cargoTest (commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoExtraArgs = "-p omp-control-protocol --target wasm32-unknown-unknown --test wasm";
+                nativeBuildInputs = [pkgs.lld pkgs.nodejs pkgs.wasm-bindgen-cli];
+              });
           }
           // cargoChecks;
 
@@ -91,8 +98,11 @@
             cargo-audit
             cargo-deny
             cargo-nextest
+            lld
+            nodejs
             rust-analyzer
             taplo
+            wasm-bindgen-cli
           ];
         };
 
