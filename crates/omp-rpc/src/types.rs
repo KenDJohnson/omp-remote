@@ -400,6 +400,12 @@ impl ChunkFrame {
     pub fn data(&self) -> &str {
         &self.data
     }
+
+    pub(crate) fn append_decoded_data(&self, output: &mut Vec<u8>) {
+        BASE64
+            .decode_vec(self.data.as_bytes(), output)
+            .expect("validated RPC chunk data remains valid base64");
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

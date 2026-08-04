@@ -1,3 +1,5 @@
+use std::{fmt, num::NonZeroU64};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -53,6 +55,177 @@ fn encode_json_line(value: &impl Serialize) -> serde_json::Result<Vec<u8>> {
     serde_json::to_writer(&mut output, value)?;
     output.push(b'\n');
     Ok(output)
+}
+
+#[derive(Debug)]
+pub struct RpcFrameDecoder {
+    pending: Option<PendingChunks>,
+    max_reassembled_frame_bytes: NonZeroU64,
+}
+
+impl RpcFrameDecoder {
+    #[must_use]
+    pub fn new(max_reassembled_frame_bytes: NonZeroU64) -> Self {
+        Self {
+            pending: None,
+            max_reassembled_frame_bytes,
+        }
+    }
+
+    pub fn push_json_line(
+        &mut self,
+        line: impl AsRef<[u8]>,
+    ) -> Result<Option<ServerMessage>, RpcFrameDecodeError> {
+        let message =
+            ServerMessage::from_json_line(line).map_err(RpcFrameDecodeError::InvalidJson)?;
+        self.push(message)
+    }
+
+    pub fn push(
+        &mut self,
+        message: ServerMessage,
+    ) -> Result<Option<ServerMessage>, RpcFrameDecodeError> {
+        let ServerMessage::Transport(TransportFrame::RpcChunk { chunk }) = message else {
+            if self.pending.is_some() {
+                return Err(RpcFrameDecodeError::SequenceInterrupted);
+            }
+            if let ServerMessage::Transport(TransportFrame::Ready { ready }) = &message {
+                self.max_reassembled_frame_bytes = ready.max_reassembled_frame_bytes();
+            }
+            return Ok(Some(message));
+        };
+
+        if chunk.byte_length() > self.max_reassembled_frame_bytes {
+            return Err(RpcFrameDecodeError::DeclaredLengthExceedsLimit);
+        }
+
+        if self.pending.is_none() {
+            if chunk.index() != 0 {
+                return Err(RpcFrameDecodeError::SequenceMustStartAtZero);
+            }
+            self.pending = Some(PendingChunks {
+                chunk_id: chunk.chunk_id().to_owned(),
+                count: chunk.count(),
+                byte_length: chunk.byte_length(),
+                next_index: 0,
+                data: Vec::with_capacity(
+                    usize::try_from(chunk.byte_length().get())
+                        .expect("RPC reassembly limit fits supported targets"),
+                ),
+            });
+        }
+
+        let pending = self
+            .pending
+            .as_mut()
+            .expect("RPC chunk state was initialized");
+        if pending.chunk_id != chunk.chunk_id()
+            || pending.count != chunk.count()
+            || pending.byte_length != chunk.byte_length()
+            || pending.next_index != chunk.index()
+        {
+            return Err(RpcFrameDecodeError::SequenceMismatch);
+        }
+
+        chunk.append_decoded_data(&mut pending.data);
+        pending.next_index += 1;
+        if pending.data.len() as u64 > pending.byte_length.get() {
+            return Err(RpcFrameDecodeError::SequenceExceedsDeclaredLength);
+        }
+        if u64::from(pending.next_index) < pending.count.get() {
+            return Ok(None);
+        }
+        if pending.data.len() as u64 != pending.byte_length.get() {
+            return Err(RpcFrameDecodeError::SequenceLengthMismatch);
+        }
+
+        let pending = self
+            .pending
+            .take()
+            .expect("completed RPC chunk state is present");
+        let json = String::from_utf8(pending.data).map_err(RpcFrameDecodeError::InvalidUtf8)?;
+        let message =
+            ServerMessage::from_json_line(json).map_err(RpcFrameDecodeError::InvalidJson)?;
+        if matches!(
+            &message,
+            ServerMessage::Transport(TransportFrame::RpcChunk { .. })
+        ) {
+            return Err(RpcFrameDecodeError::NestedChunkFrame);
+        }
+        Ok(Some(message))
+    }
+
+    #[must_use]
+    pub fn is_reassembling(&self) -> bool {
+        self.pending.is_some()
+    }
+}
+
+impl Default for RpcFrameDecoder {
+    fn default() -> Self {
+        Self::new(
+            NonZeroU64::new(crate::ReadyFrame::DEFAULT_MAX_REASSEMBLED_FRAME_BYTES)
+                .expect("the default RPC reassembly limit is non-zero"),
+        )
+    }
+}
+
+#[derive(Debug)]
+struct PendingChunks {
+    chunk_id: String,
+    count: NonZeroU64,
+    byte_length: NonZeroU64,
+    next_index: u32,
+    data: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum RpcFrameDecodeError {
+    SequenceInterrupted,
+    SequenceMustStartAtZero,
+    SequenceMismatch,
+    SequenceExceedsDeclaredLength,
+    SequenceLengthMismatch,
+    DeclaredLengthExceedsLimit,
+    InvalidUtf8(std::string::FromUtf8Error),
+    InvalidJson(serde_json::Error),
+    NestedChunkFrame,
+}
+
+impl fmt::Display for RpcFrameDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SequenceInterrupted => formatter.write_str("RPC chunk sequence was interrupted"),
+            Self::SequenceMustStartAtZero => {
+                formatter.write_str("RPC chunk sequence must start at index zero")
+            }
+            Self::SequenceMismatch => formatter.write_str("RPC chunk sequence metadata mismatch"),
+            Self::SequenceExceedsDeclaredLength => {
+                formatter.write_str("RPC chunk sequence exceeds its declared byte length")
+            }
+            Self::SequenceLengthMismatch => {
+                formatter.write_str("RPC chunk sequence byte length mismatch")
+            }
+            Self::DeclaredLengthExceedsLimit => {
+                formatter.write_str("RPC chunk sequence exceeds the advertised reassembly limit")
+            }
+            Self::InvalidUtf8(_) => formatter.write_str("reassembled RPC frame is not valid UTF-8"),
+            Self::InvalidJson(_) => formatter.write_str("RPC frame is not valid JSON"),
+            Self::NestedChunkFrame => {
+                formatter.write_str("reassembled RPC frame cannot contain another chunk frame")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RpcFrameDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidUtf8(error) => Some(error),
+            Self::InvalidJson(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,5 +1,6 @@
 use std::num::NonZeroU64;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use omp_rpc::*;
 use serde_json::json;
 
@@ -287,6 +288,96 @@ fn ready_and_chunk_frames_validate_transport_invariants() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn protocol_v2_chunks_reassemble_one_logical_frame() {
+    let expected = ServerMessage::SideChannel(SideChannelFrame::CommandOutput {
+        text: "x".repeat(ChunkFrame::MIN_BYTE_LENGTH as usize),
+    });
+    let chunks = chunked_server_message(&expected, "rpc-success");
+    assert!(chunks.len() > 1);
+
+    let mut decoder = RpcFrameDecoder::default();
+    for chunk in chunks.iter().take(chunks.len() - 1).cloned() {
+        assert!(decoder.push(chunk).unwrap().is_none());
+        assert!(decoder.is_reassembling());
+    }
+    let decoded = decoder.push(chunks.last().unwrap().clone()).unwrap();
+    assert_eq!(decoded, Some(expected));
+    assert!(!decoder.is_reassembling());
+}
+
+#[test]
+fn protocol_v2_reassembly_rejects_sequence_corruption() {
+    let expected = ServerMessage::SideChannel(SideChannelFrame::CommandOutput {
+        text: "x".repeat(ChunkFrame::MIN_BYTE_LENGTH as usize),
+    });
+    let chunks = chunked_server_message(&expected, "rpc-corrupt");
+
+    let mut mismatched = RpcFrameDecoder::default();
+    assert!(mismatched.push(chunks[0].clone()).unwrap().is_none());
+    assert!(matches!(
+        mismatched.push(chunks[2].clone()),
+        Err(RpcFrameDecodeError::SequenceMismatch)
+    ));
+
+    let mut interrupted = RpcFrameDecoder::default();
+    assert!(interrupted.push(chunks[0].clone()).unwrap().is_none());
+    assert!(matches!(
+        interrupted.push(ServerMessage::SessionEvent(SessionEvent::AgentStart)),
+        Err(RpcFrameDecodeError::SequenceInterrupted)
+    ));
+}
+
+#[test]
+fn protocol_v2_reassembly_honors_the_ready_frame_limit() {
+    let expected = ServerMessage::SideChannel(SideChannelFrame::CommandOutput {
+        text: "x".repeat(ChunkFrame::MIN_BYTE_LENGTH as usize),
+    });
+    let chunks = chunked_server_message(&expected, "rpc-limit");
+    let ready = ReadyFrame::new(
+        NonZeroU64::new(ChunkFrame::MIN_BYTE_LENGTH).unwrap(),
+        NonZeroU64::new(ChunkFrame::MIN_BYTE_LENGTH).unwrap(),
+    )
+    .unwrap();
+
+    let mut decoder = RpcFrameDecoder::default();
+    assert!(
+        decoder
+            .push(ServerMessage::Transport(TransportFrame::Ready { ready }))
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        decoder.push(chunks[0].clone()),
+        Err(RpcFrameDecodeError::DeclaredLengthExceedsLimit)
+    ));
+}
+
+fn chunked_server_message(message: &ServerMessage, chunk_id: &str) -> Vec<ServerMessage> {
+    let bytes = serde_json::to_vec(message).unwrap();
+    assert!(bytes.len() as u64 >= ChunkFrame::MIN_BYTE_LENGTH);
+    let count = bytes.len().div_ceil(ChunkFrame::MAX_PAYLOAD_BYTES) as u64;
+    let count = NonZeroU64::new(count).unwrap();
+    let byte_length = NonZeroU64::new(bytes.len() as u64).unwrap();
+
+    bytes
+        .chunks(ChunkFrame::MAX_PAYLOAD_BYTES)
+        .enumerate()
+        .map(|(index, data)| {
+            ServerMessage::Transport(TransportFrame::RpcChunk {
+                chunk: ChunkFrame::new(
+                    chunk_id,
+                    index as u32,
+                    count,
+                    byte_length,
+                    BASE64.encode(data),
+                )
+                .unwrap(),
+            })
+        })
+        .collect()
 }
 
 #[test]

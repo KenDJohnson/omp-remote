@@ -1,0 +1,15 @@
+[package]
+name = "omp-runtime"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+omp-rpc = { path = "../omp-rpc" }
+serde_json.workspace = true
+tokio.workspace = true
+
+[[bin]]
+name = "omp-runtime-fixture"
+path = "test-support/fixture.rs"
+test = false
